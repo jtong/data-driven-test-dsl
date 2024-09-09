@@ -20,13 +20,32 @@ exports.runTests = function (config) {
 
             it(testCase.desc, async function () {
                 this.timeout(10000);
-                const result = await config.testFunction(testCase.given, filePath);
+                
+                let customTestFunction, customValidator;
+                
+                // 加载自定义测试函数（如果存在）
+                if (testCase.customTestFunctionPath) {
+                    const functionPath = path.resolve(path.dirname(filePath), testCase.customTestFunctionPath);
+                    customTestFunction = require(functionPath);
+                }
+                
+                // 加载自定义验证函数（如果存在）
+                if (testCase.customValidatorPath) {
+                    const validatorPath = path.resolve(path.dirname(filePath), testCase.customValidatorPath);
+                    customValidator = require(validatorPath);
+                }
+                
+                // 执行测试函数
+                const testFunction = customTestFunction || config.testFunction;
+                const result = await testFunction(testCase.given, filePath);
 
-                // 如果提供了自定义验证函数，则使用它进行验证
-                if (config.customValidator) {
+                // 执行验证
+                if (customValidator) {
+                    customValidator(result, testCase);
+                } else if (config.customValidator) {
                     config.customValidator(result, testCase);
                 } else {
-                    // 否则使用默认验证逻辑
+                    // 使用默认的验证逻辑
                     validateResult(result, testCase);
                 }
             });
@@ -69,15 +88,30 @@ function validateResult(result, testCase) {
 function handleRuleMatch(result, rules) {
     // 处理ruleMatch规则
     rules.forEach(rule => {
-        const actualValue = rule.target && rule.target !== '' ? result[rule.target] : result;
-        
+        const actualValue =  rule.target && rule.target !== '' ? getNestedProperty(result, rule.target) : result;
+
         // 根据rule.type处理不同的验证逻辑
         switch (rule.type) {
+            case "hasKey":
+                expect(actualValue, `Expected object to have key '${rule.value}'`).to.have.property(rule.value);
+                break;
+            case "isArray":
+                const targetValue = rule.target ? result[rule.target] : result;
+                expect(targetValue, `Expected '${rule.target || 'result'}' to be an array`).to.be.an('array');
+                break;
+            case "lengthEquals":
+                const arrayToCheck = rule.target ? result[rule.target] : result;
+                expect(arrayToCheck.length, `Expected length to be ${rule.value}, but got ${arrayToCheck.length}`).to.equal(rule.value);
+                break;
             case "lengthNotGreaterThan":
                 expect(actualValue.length, `Expected length to be at most ${rule.value}, but got ${actualValue.length}`).to.be.at.most(rule.value);
                 break;
             case "lengthGreaterThan":
                 expect(actualValue.length, `Expected length to be greater than ${rule.value}, but got ${actualValue.length}`).to.be.greaterThan(rule.value);
+                break;
+            case "isObject":
+                const objectToCheck = rule.target ? result[rule.target] : result;
+                expect(objectToCheck, `Expected '${rule.target || 'result'}' to be an object`).to.be.an('object');
                 break;
             case "stringEqualsIgnoreCase":
                 const expectedValue = rule.value;
@@ -88,4 +122,8 @@ function handleRuleMatch(result, rules) {
                 throw new Error(`Unhandled rule type: ${rule.type}`);
         }
     });
+}
+
+function getNestedProperty(obj, path) {
+    return path.split('.').reduce((current, key) => current && current[key] !== undefined ? current[key] : undefined, obj);
 }
